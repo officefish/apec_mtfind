@@ -275,79 +275,112 @@ public:
     }
 };
 
-/*
+
 class Invoker 
 {
 
 private:
+    std::string m_sPath;
+    std::string m_sMask;
+
     std::vector<std::string> m_rgLines;
     std::vector<std::string> m_rgNeedles;
     std::vector<Token> m_rgTokens;
 
-    std::mutex m_Mutex;
+    uint8_t m_nAlgorithm;
 
-    std::function<void(std::vector<Token>&, const std::vector<std::vector<Token>>&)> fn_CollectTokens = 
-    [](std::vector<Token>& tokens, const std::vector<std::vector<Token>>& lineTokensList) -> void
+public:
+    Invoker(const std::string& path, const std::string& mask, uint8_t algorithm) 
+    : m_sPath(path), m_sMask(mask), m_nAlgorithm(algorithm) {}
+
+    Invoker(Invoker&& invoker)
     {
-        for (auto & lineTokens : lineTokensList)
-        {
-            std::copy (lineTokens.begin(), lineTokens.end(), std::back_inserter(tokens));
-        }
-    };
+        m_sPath = invoker.m_sPath;
+        m_sMask = invoker.m_sMask;
+        m_nAlgorithm = invoker.m_nAlgorithm;
+    }
 
-    bool fn_Search(
-        std::vector<std::string>& lines, 
-        std::vector<std::string>& needles,
-        std::vector<Token>& tokens,
-        std::mutex& search_mutex)
+    Invoker(const Invoker& invoker)
     {
-        while (!lines.empty())
+        m_sPath = invoker.m_sPath;
+        m_sMask = invoker.m_sMask;
+        m_nAlgorithm = invoker.m_nAlgorithm;
+    }
+    
+
+    void search_preproduction()
+    {
+        /* Produce needles in separate thread */
+    
+        bool getNeedlesStatus = false;
+
+        std::thread getNeedles_thread(
+            [](std::string mask, std::vector<std::string>& needles, bool& status)
+            {
+                NeedleMaker maker;
+                if (!maker.isValidMask(mask)) return;
+                needles = maker.makeFromMask(mask);
+                status = true;
+            }, m_sMask, std::ref(m_rgNeedles), std::ref(getNeedlesStatus));
+
+        
+        /* Produce separate lines from file in separate thread */
+        
+        bool getLinesStatus = false;
+
+        std::thread getLines_thread(
+            [](std::string path, std::vector<std::string>& lines, bool& status)
+            {
+                Separator separator;
+                separator.open(path);
+                if (!separator.isFileOpen()) return;
+                lines = separator.getLines();
+                separator.closeFile();
+                status = true;
+            }, m_sPath, std::ref(m_rgLines), std::ref(getLinesStatus)); 
+
+        getNeedles_thread.join();
+        getLines_thread.join();
+
+        /* If both thread process status is correct - continue */
+        assert (getNeedlesStatus && "Mask is incorrect");
+        assert (getLinesStatus && "File path is incorrect");     
+    }
+
+    void parallel_search()
+    {
+        auto collectTokens = [](std::vector<Token>& tokens, const std::vector<std::vector<Token>>& lineTokensList) -> void
         {
+            for (auto & lineTokens : lineTokensList)
+            {
+                std::copy (lineTokens.begin(), lineTokens.end(), std::back_inserter(tokens));
+            }
+        };
 
-            std::string line = lines.back();
-            lines.pop_back();
+        while (!m_rgLines.empty())
+        {       
+            std::string line = m_rgLines.back();
+            m_rgLines.pop_back();
 
-            uint16_t lineIndex = lines.size();
+            uint16_t lineIndex = m_rgLines.size();
+            std::vector<std::vector<Token>> lineTokens(m_rgNeedles.size());
 
-            std::vector<std::vector<Token>> lineTokens;
-
-            auto searchTokens = [line, lineIndex](std::string needle) -> std::vector<Token> 
+            auto searchTokens = [&](std::string needle) -> std::vector<Token> 
             {
                 Searcher searcher(line, needle, lineIndex, 0);
                 std::vector<Token> lineNeedleTokens = searcher.search();
                 return lineNeedleTokens;
             };
 
-            std::transform(// std::execution::par,  
-            needles.begin(), needles.end(), std::back_inserter(lineTokens),
+            std::transform(std::execution::par, // parallel thread search  
+            m_rgNeedles.begin(), m_rgNeedles.end(), lineTokens.begin(),
             searchTokens);
 
-            fn_CollectTokens(m_rgTokens, lineTokens);
-        }
-
-        return true; 
+            collectTokens(m_rgTokens, lineTokens);
+        }  
     }
 
-public:
-    Invoker(const std::vector<std::string>& lines, const std::vector<std::string>& needles)
-    {
-        m_rgLines.insert(m_rgLines.end(), lines.begin(), lines.end());
-        m_rgNeedles.insert(m_rgNeedles.end(), needles.begin(), needles.end());
-    }
-
-    void parralelSearch (uint8_t numThreads)
-    {
-        for (auto& v : numThreads)
-        {
-            std::future<bool> thread_future = std::async(std::launch::async, fn_Search, 
-            std::ref(m_rgLines), std::ref(m_rgNeedles), std::ref(m_rgTokens), std::ref(m_Mutex));
-        }
-    }
-
-    
-}
-*/
-
+};
 
 
 int main(int argc, char *argv[])
@@ -358,100 +391,12 @@ int main(int argc, char *argv[])
 
     std::string path = cmdArgs.getPath();
     std::string mask = cmdArgs.getMask();
+    uint8_t algorithm = cmdArgs.getAlgorithm();
 
-    /* Produce needles in separate thread */
-    bool getNeedlesStatus = false;
-    std::vector<std::string> needles;
-
-    std::thread getNeedles_thread(
-        [](std::string mask, std::vector<std::string>& needles, bool& status)
-        {
-            NeedleMaker maker;
-            if (!maker.isValidMask(mask)) return;
-            needles = maker.makeFromMask(mask);
-            status = true;
-        }, mask, std::ref(needles), std::ref(getNeedlesStatus));
-
-    /* Produce separate lines from file in separate thread */
-    bool getLinesStatus = false;
-    std::vector<std::string> lines;
-    std::thread getLines_thread(
-        [](std::string path, std::vector<std::string>& lines, bool& status)
-        {
-            Separator separator;
-            separator.open(path);
-            if (!separator.isFileOpen()) return;
-            lines = separator.getLines();
-            separator.closeFile();
-            status = true;
-        }, path, std::ref(lines), std::ref(getLinesStatus)); 
-
-    getNeedles_thread.join();
-    getLines_thread.join();
-
-    /* If both thread process status is correct - continue */
-    assert (getNeedlesStatus && "Mask is incorrect");
-    assert (getLinesStatus && "File path is incorrect");
-
-    /*
-
-    */
-    std::vector<Token> tokens;
-
-    auto collectTokens = [](std::vector<Token>& tokens, const std::vector<std::vector<Token>>& lineTokensList) -> void
-    {
-        for (auto & lineTokens : lineTokensList)
-        {
-            std::copy (lineTokens.begin(), lineTokens.end(), std::back_inserter(tokens));
-        }
-    };
-
-    std::mutex search_mutex;
-
-    while (!lines.empty())
-    {
-        
-        std::string line = lines.back();
-        lines.pop_back();
-
-        uint16_t lineIndex = lines.size();
-
-        std::vector<std::vector<Token>> lineTokens;
-
-        auto searchTokens = [&](std::string needle) -> std::vector<Token> 
-        {
-            std::lock_guard<std::mutex> lock{search_mutex};
-            //search_mutex.lock();
-            Searcher searcher(line, needle, lineIndex, 0);
-            //search_mutex.unlock();
-            std::vector<Token> lineNeedleTokens = searcher.search();
-            return lineNeedleTokens;
-        };
-
-        std::transform(std::execution::par,  
-        needles.begin(), needles.end(), lineTokens.end(),
-        searchTokens);
-
-        collectTokens(tokens, lineTokens);
-    }
-
+    Invoker invoker(path, mask, algorithm);
+    invoker.search_preproduction();
+    invoker.parallel_search();
     
-
-    /*
-    auto it = std::search(in.begin(), in.end(),
-                   std::boyer_moore_searcher(
-                       needle.begin(), needle.end()));
-    if(it != in.end())
-        std::cout << "The string " << needle << " found at offset "
-                  << it - in.begin() << '\n';
-    else
-        std::cout << "The string " << needle << " not found\n";
-    */
-
-    //Searcher searcher { in, needle };
-    //auto tokens = searcher.search();
-
-    //std::cout << tokens.size() << std::endl;
 
     return 0;
 }
