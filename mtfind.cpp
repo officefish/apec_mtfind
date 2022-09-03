@@ -4,14 +4,17 @@ Test quiz for APEC
 
 developer: Sergey Inozemcev
 
-compile: g++ mtfind.cpp -pthread -std=c++17 -o mtfind
+compile: g++ mtfind.cpp -ltbb -pthread -std=c++17 -o mtfind
 
-run: ./mtfind -a=1 loren_ipsum.txt "someMask"
+run: ./mtfind -a=1 input.txt "?ad"
 
 *-a or --algorithm - is searcher algorithm used for search
 0 - (default) std::default_searcher
 1 - std::boyer_moore_searcher
 2 - std::boyer_moore_horspool_searcher
+
+* only two "?"" for mask can be used, 
+for upgrade mask numbers we should refactor source code of std searchers code
 
 *******************************************************************************/
 
@@ -22,6 +25,8 @@ run: ./mtfind -a=1 loren_ipsum.txt "someMask"
 #include <string>
 #include <string_view>
 #include <vector>
+#include <set>
+
 #include <fstream>
 #include <filesystem>
 
@@ -76,7 +81,7 @@ private:
         if (ascii.size()) 
             return ascii;
 
-        for (size_t i = 32; i < 128; ++i)
+        for (size_t i = 32; i < 127; ++i)
         {
             // if char is not "?"
             if (i != 63) 
@@ -88,6 +93,9 @@ private:
 public:
     bool isValidMask (std::string mask)
     {
+        if (mask.length() > 100) return false;
+
+        /* mask limit is 2 "?" */
         uint8_t anyCounter = 0;
         for (auto& character : mask)
         {
@@ -95,9 +103,7 @@ public:
             if (character == 63) 
                 anyCounter++;
         }
-
         return anyCounter > 2 ? false : true;
-
     }
 
     std::vector<std::string> makeFromMask (std::string mask)
@@ -186,7 +192,21 @@ public:
     Token(std::string needle, uint16_t symbolIndex, uint32_t lineIndex)
     : m_sNeedle(needle), m_nSymbolIndex(symbolIndex), m_nLineIndex(lineIndex)
     {}
+
+    bool operator< (const Token &other) const {
+        return m_nLineIndex < other.m_nLineIndex;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const Token& token);
+
 };
+
+std::ostream& operator<<(std::ostream& os, const Token& token)
+{
+    os << token.m_nLineIndex << ' ' << token.m_nSymbolIndex << ' ' << token.m_sNeedle;
+    return os;
+}
+
 
 
 class Searcher {
@@ -199,18 +219,19 @@ class Searcher {
 
 private:
 
-    std::string::iterator m_itCursor;
-    std::string::iterator m_itBeginLine;
-    std::string::iterator m_itEndLine;
+    Searcher(Searcher&& searcher);
+    Searcher(const Searcher& searcher);
+
     std::string m_sNeedle;
+    std::string m_sSource;
 
     uint32_t m_nLineIndex;
     
     SearchPattern fn_Searcher;
 
-    std::string::iterator fn_searchNextCursor (std::string::iterator begin, std::string::iterator end)
+    std::string::iterator fn_searchNextCursor (std::string::iterator& begin, std::string::iterator& end)
     {
-        return std::search(begin, end, fn_Searcher);
+        return std::search(begin, end, fn_Searcher);        
     }
 
 public:
@@ -228,47 +249,28 @@ public:
         }
 
         m_sNeedle = needle;
-        m_itCursor = source.begin();
-        m_itBeginLine = source.begin();
-        m_itEndLine = source.end();
+        m_sSource = source;
 
         m_nLineIndex = lineIndex;
     }
 
-    Searcher(Searcher&& searcher)
-    {
-        m_sNeedle = searcher.m_sNeedle;
-        m_itCursor = searcher.m_itCursor;
-        m_itBeginLine = searcher.m_itBeginLine;
-        m_itEndLine = searcher.m_itEndLine;
-        m_nLineIndex = searcher.m_nLineIndex;
-        fn_Searcher = searcher.fn_Searcher;
-    }
-
-    
-    Searcher(const Searcher& searcher)
-    {
-        m_sNeedle = searcher.m_sNeedle;
-        m_itCursor = searcher.m_itCursor;
-        m_itBeginLine = searcher.m_itBeginLine;
-        m_itEndLine = searcher.m_itEndLine;
-        m_nLineIndex = searcher.m_nLineIndex;
-        fn_Searcher = searcher.fn_Searcher;
-    }
-
-
     std::vector<Token> search()
     {
         std::vector<Token> rg_Tokens;
-        while(m_itCursor != m_itEndLine)
+
+        auto cursor = m_sSource.begin();
+        auto beginLine = m_sSource.begin();
+        auto endLine = m_sSource.end();
+
+        while(cursor != endLine)
         {
-            m_itCursor = fn_searchNextCursor(m_itCursor, m_itEndLine);
+            cursor = fn_searchNextCursor(cursor, endLine);
             
-            if (m_itCursor != m_itEndLine) 
+            if (cursor != endLine) 
             {
-                auto symbolIndex = m_itCursor - m_itBeginLine;
-                rg_Tokens.emplace_back(m_sNeedle, symbolIndex, m_nLineIndex);
-                m_itCursor++;
+                auto symbolIndex = cursor - beginLine;
+                rg_Tokens.emplace_back(m_sNeedle, symbolIndex + 1, m_nLineIndex);
+                cursor++;
             }
         }
         return rg_Tokens;
@@ -280,33 +282,21 @@ class Invoker
 {
 
 private:
+    Invoker(Invoker&& invoker);
+    Invoker(const Invoker& invoker);
+
     std::string m_sPath;
     std::string m_sMask;
 
     std::vector<std::string> m_rgLines;
     std::vector<std::string> m_rgNeedles;
-    std::vector<Token> m_rgTokens;
+    std::set<Token> m_rgTokens;
 
     uint8_t m_nAlgorithm;
 
 public:
     Invoker(const std::string& path, const std::string& mask, uint8_t algorithm) 
     : m_sPath(path), m_sMask(mask), m_nAlgorithm(algorithm) {}
-
-    Invoker(Invoker&& invoker)
-    {
-        m_sPath = invoker.m_sPath;
-        m_sMask = invoker.m_sMask;
-        m_nAlgorithm = invoker.m_nAlgorithm;
-    }
-
-    Invoker(const Invoker& invoker)
-    {
-        m_sPath = invoker.m_sPath;
-        m_sMask = invoker.m_sMask;
-        m_nAlgorithm = invoker.m_nAlgorithm;
-    }
-    
 
     void search_preproduction()
     {
@@ -344,32 +334,34 @@ public:
 
         /* If both thread process status is correct - continue */
         assert (getNeedlesStatus && "Mask is incorrect");
-        assert (getLinesStatus && "File path is incorrect");     
+        assert (getLinesStatus && "File path is incorrect");   
     }
 
     void parallel_search()
     {
-        auto collectTokens = [](std::vector<Token>& tokens, const std::vector<std::vector<Token>>& lineTokensList) -> void
+
+        auto collectTokens = [](std::set<Token>& tokens, const std::vector<std::vector<Token>>& lineTokensList) -> void
         {
             for (auto & lineTokens : lineTokensList)
             {
-                std::copy (lineTokens.begin(), lineTokens.end(), std::back_inserter(tokens));
+                for (auto & token : lineTokens)
+                    tokens.insert(token); 
             }
         };
 
         while (!m_rgLines.empty())
         {       
             std::string line = m_rgLines.back();
-            m_rgLines.pop_back();
-
             uint16_t lineIndex = m_rgLines.size();
+
+            m_rgLines.pop_back();
+            
             std::vector<std::vector<Token>> lineTokens(m_rgNeedles.size());
 
             auto searchTokens = [&](std::string needle) -> std::vector<Token> 
             {
                 Searcher searcher(line, needle, lineIndex, 0);
-                std::vector<Token> lineNeedleTokens = searcher.search();
-                return lineNeedleTokens;
+                return searcher.search();
             };
 
             std::transform(std::execution::par, // parallel thread search  
@@ -378,6 +370,13 @@ public:
 
             collectTokens(m_rgTokens, lineTokens);
         }  
+    }
+
+    void output()
+    {
+        std::cout << m_rgTokens.size() << "\n";
+        for (auto& token : m_rgTokens)
+            std::cout << token << "\n";
     }
 
 };
@@ -393,10 +392,11 @@ int main(int argc, char *argv[])
     std::string mask = cmdArgs.getMask();
     uint8_t algorithm = cmdArgs.getAlgorithm();
 
+    /* Parallel search using invoker */
     Invoker invoker(path, mask, algorithm);
     invoker.search_preproduction();
     invoker.parallel_search();
-    
+    invoker.output(); 
 
     return 0;
 }
