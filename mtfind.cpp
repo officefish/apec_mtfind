@@ -79,9 +79,9 @@ private:
     std::vector<char>& getASCII()
     {
         if (ascii.size()) 
-            return ascii;
+            return std::ref(ascii);
 
-        for (size_t i = 32; i < 127; ++i)
+        for (uint8_t i = 32; i < 127; ++i)
         {
             // if char is not "?"
             if (i != 63) 
@@ -206,8 +206,6 @@ std::ostream& operator<<(std::ostream& os, const Token& token)
     os << token.m_nLineIndex << ' ' << token.m_nSymbolIndex << ' ' << token.m_sNeedle;
     return os;
 }
-
-
 
 class Searcher {
 
