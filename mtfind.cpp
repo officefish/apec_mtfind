@@ -360,7 +360,7 @@ public:
 
             auto searchTokens = [&](std::string needle) -> std::vector<Token> 
             {
-                Searcher searcher(line, needle, lineIndex, 0);
+                Searcher searcher(line, needle, lineIndex, m_nAlgorithm);
                 return searcher.search();
             };
 
