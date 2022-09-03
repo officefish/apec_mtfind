@@ -350,10 +350,10 @@ public:
         };
 
         while (!m_rgLines.empty())
-        {       
+        {   
+            uint16_t lineIndex = m_rgLines.size();    
+            
             std::string line = m_rgLines.back();
-            uint16_t lineIndex = m_rgLines.size();
-
             m_rgLines.pop_back();
             
             std::vector<std::vector<Token>> lineTokens(m_rgNeedles.size());
